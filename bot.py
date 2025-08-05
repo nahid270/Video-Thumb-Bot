@@ -4,7 +4,7 @@ from pyrogram import Client, filters, types
 from pyrogram.types import Message
 from dotenv import load_dotenv
 from aiohttp import web
-from PIL import Image # ★★★ Pillow লাইব্রেরি ইম্পোর্ট করা হলো ★★★
+from PIL import Image
 
 # --- .env ফাইল থেকে ভ্যারিয়েবল লোড করা ---
 load_dotenv()
@@ -34,14 +34,11 @@ def cleanup_files(*paths):
         except Exception as e:
             print(f"ফাইল ডিলিট করতে সমস্যা: {path}: {e}")
 
-# --- ★★★ নতুন ফাংশন: সঠিক থাম্বনেইল তৈরি করা ★★★ ---
 def create_thumbnail(file_path: str) -> str:
     try:
         thumb_path = f"{file_path}_thumb.jpg"
         with Image.open(file_path) as img:
-            # থাম্বনেইল সাইজ 320x320 এর মধ্যে রাখা হচ্ছে
             img.thumbnail((320, 320))
-            # RGBA (PNG) হলে RGB (JPEG) তে কনভার্ট করা
             if img.mode == 'RGBA':
                 img = img.convert('RGB')
             img.save(thumb_path, "JPEG")
@@ -58,9 +55,25 @@ async def get_new_file_id(message: Message):
         print(f"লগ চ্যানেলে মেসেজ কপি করতে সমস্যা: {e}")
         return None
 
+# --- ★★★ নতুন হেল্পার ফাংশন: মেসেজ এডিট করার জন্য ★★★ ---
+async def edit_status(message: Message, new_text: str):
+    """
+    মেসেজ এডিট করে, কিন্তু যদি টেক্সট একই থাকে তাহলে এরর এড়ানোর জন্য কিছু করে না।
+    """
+    try:
+        # যদি বর্তমান টেক্সট এবং নতুন টেক্সট ভিন্ন হয়, তবেই এডিট করবে
+        if message.text != new_text:
+            await message.edit_text(new_text)
+    except Exception as e:
+        # MessageNotModified এরর উপেক্ষা করা
+        if "MESSAGE_NOT_MODIFIED" not in str(e):
+            print(f"মেসেজ এডিট করতে সমস্যা: {e}")
+
 @app.on_message(filters.command("start"))
 async def start_cmd(client: Client, message: Message):
-    user_data.pop(message.from_user.id, None)
+    user_id = message.from_user.id
+    cleanup_files(user_data.get(user_id, {}).get("thumb_path"))
+    user_data.pop(user_id, None)
     await message.reply_text("👋 হ্যালো! ছবি ও ভিডিও পাঠান, আমি থাম্বনেইল সেট করে দেব।")
 
 @app.on_message(filters.photo)
@@ -70,26 +83,23 @@ async def receive_photo(client: Client, message: Message):
     
     status_msg = await message.reply_text("🖼️ ছবি ডাউনলোড ও প্রসেস করছি...", quote=True)
     
-    # ছবিটি ডাউনলোড করা হচ্ছে
     original_photo_path = await message.download(file_name=f"downloads/{message.id}_original.jpg")
-    
-    # ডাউনলোড করা ছবি থেকে সঠিক থাম্বনেইল তৈরি করা
     thumb_path = create_thumbnail(original_photo_path)
     
     if not thumb_path:
-        await status_msg.edit_text("❌ এই ছবিটি প্রসেস করা যাচ্ছে না। অন্য একটি ছবি চেষ্টা করুন।")
+        await edit_status(status_msg, "❌ এই ছবিটি প্রসেস করা যাচ্ছে না। অন্য একটি ছবি চেষ্টা করুন।")
         cleanup_files(original_photo_path)
         return
 
     if user_id not in user_data:
         user_data[user_id] = {}
     
-    # আগের থাম্বনেইল থাকলে সেটি ডিলিট করা
     cleanup_files(user_data[user_id].get("thumb_path"))
     user_data[user_id]['thumb_path'] = thumb_path
+    user_data[user_id]['status_msg_id'] = status_msg.id # ★★★ স্ট্যাটাস মেসেজের আইডি সেভ করা
     
     if 'video_id' in user_data[user_id]:
-        await status_msg.edit_text("⏳ ভিডিও এবং থাম্বনেইল একত্রিত করছি...")
+        await edit_status(status_msg, "⏳ ভিডিও এবং থাম্বনেইল একত্রিত করছি...")
         try:
             await client.send_video(
                 chat_id=message.chat.id,
@@ -100,14 +110,14 @@ async def receive_photo(client: Client, message: Message):
             )
             await status_msg.delete()
         except Exception as e:
-            await status_msg.edit_text(f"❌ ভিডিও পাঠাতে সমস্যা হয়েছে: {e}")
+            await edit_status(status_msg, f"❌ ভিডিও পাঠাতে সমস্যা হয়েছে: {e}")
         finally:
             cleanup_files(user_data[user_id].get("thumb_path"))
             user_data.pop(user_id, None)
     else:
-        await status_msg.edit_text("✔️ কভার ছবি প্রস্তুত। এখন ভিডিও পাঠান।")
+        # ★★★ নতুন হেল্পার ফাংশন ব্যবহার করা হচ্ছে ★★★
+        await edit_status(status_msg, "✔️ কভার ছবি প্রস্তুত। এখন ভিডিও পাঠান।")
     
-    # আসল ডাউনলোড করা ছবিটি ডিলিট করে দেওয়া
     cleanup_files(original_photo_path)
 
 @app.on_message(filters.video)
@@ -119,7 +129,7 @@ async def receive_video(client: Client, message: Message):
 
     new_video_id = await get_new_file_id(message)
     if not new_video_id:
-        await status_msg.edit_text("❌ ভিডিও প্রসেস করতে সমস্যা হয়েছে।")
+        await edit_status(status_msg, "❌ ভিডিও প্রসেস করতে সমস্যা হয়েছে।")
         return
         
     if user_id not in user_data:
@@ -129,7 +139,18 @@ async def receive_video(client: Client, message: Message):
     user_data[user_id]['video_msg_id'] = message.id
     
     if 'thumb_path' in user_data[user_id]:
-        await status_msg.edit_text("⏳ ভিডিও এবং থাম্বনেইল একত্রিত করছি...")
+        # আগের স্ট্যাটাস মেসেজটি পাওয়া এবং এডিট করা
+        try:
+            status_msg_id = user_data[user_id].get('status_msg_id')
+            if status_msg_id:
+                await client.delete_messages(chat_id=message.chat.id, message_ids=status_msg.id)
+                status_msg_to_edit = await client.get_messages(chat_id=message.chat.id, message_ids=status_msg_id)
+                await edit_status(status_msg_to_edit, "⏳ ভিডিও এবং থাম্বনেইল একত্রিত করছি...")
+            else: # যদি কোনো কারণে স্ট্যাটাস মেসেজ না পাওয়া যায়
+                status_msg_to_edit = status_msg
+        except:
+             status_msg_to_edit = status_msg
+
         try:
             await client.send_video(
                 chat_id=message.chat.id,
@@ -138,14 +159,16 @@ async def receive_video(client: Client, message: Message):
                 caption="✅ সফলভাবে থাম্বনেইল সেট করা হয়েছে।",
                 reply_to_message_id=message.id
             )
-            await status_msg.delete()
+            await status_msg_to_edit.delete()
         except Exception as e:
-            await status_msg.edit_text(f"❌ ভিডিও পাঠাতে সমস্যা হয়েছে: {e}")
+            await edit_status(status_msg_to_edit, f"❌ ভিডিও পাঠাতে সমস্যা হয়েছে: {e}")
         finally:
             cleanup_files(user_data[user_id].get("thumb_path"))
             user_data.pop(user_id, None)
     else:
-        await status_msg.edit_text("✔️ ভিডিও প্রস্তুত। এখন থাম্বনেইলের জন্য ছবি পাঠান।")
+        await edit_status(status_msg, "✔️ ভিডিও প্রস্তুত। এখন থাম্বনেইলের জন্য ছবি পাঠান।")
+
+# --- ওয়েব সার্ভার এবং মূল ফাংশন (অপরিবর্তিত) ---
 
 async def on_startup(web_app):
     if not os.path.isdir("downloads"):
