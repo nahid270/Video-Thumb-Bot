@@ -13,108 +13,119 @@ API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", 8080))
+# --- ★★★ নতুন ভ্যারিয়েবল: লগ চ্যানেল আইডি ★★★ ---
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 
 # --- ভ্যারিয়েবল ঠিকমতো সেট করা আছে কিনা তা পরীক্ষা করা ---
-if not all([API_ID, API_HASH, BOT_TOKEN]):
-    raise ValueError("প্রয়োজনীয় Environment Variables (API_ID, API_HASH, BOT_TOKEN) সেট করা নেই।")
+if not all([API_ID, API_HASH, BOT_TOKEN, LOG_CHANNEL_ID]):
+    raise ValueError("প্রয়োজনীয় Environment Variables (API_ID, API_HASH, BOT_TOKEN, LOG_CHANNEL_ID) সেট করা নেই।")
 
 API_ID = int(API_ID)
 
-# --- অ্যাপ্লিকেশন স্টোরেজ (file_id ব্যবহার করে) ---
-video_pending = {}  # {user_id: {"video_file_id": "...", "video_msg_id": ...}}
-user_cover = {}     # {user_id: "photo_file_id"}
+# --- অ্যাপ্লিকেশন স্টোরেজ ---
+user_data = {} # {user_id: {"cover_id": "...", "video_id": "...", "video_msg_id": ...}}
 
-# --- Pyrogram ক্লায়েন্ট ---
-app = Client("thumb_bot_fast", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("thumb_bot_final", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# --- বট কমান্ড লিস্ট ---
-BOT_COMMANDS = [
-    types.BotCommand("start", "🤖 বট চালু করুন"),
-    types.BotCommand("show_cover", "🖼️ সেভ করা কভার দেখুন"),
-    types.BotCommand("del_cover", "🗑️ সেভ করা কভার মুছুন"),
-]
-
-# --- হ্যান্ডলার (সংশোধিত) ---
+# --- ★★★ নতুন ফাংশন: ফাইল ফরোয়ার্ড করে নতুন file_id পাওয়া ★★★ ---
+async def get_new_file_id(file_id):
+    try:
+        # ফাইলটি লগ চ্যানেলে ফরোয়ার্ড করা
+        forwarded_message = await app.send_cached_media(
+            chat_id=LOG_CHANNEL_ID,
+            file_id=file_id
+        )
+        # ফরোয়ার্ড করা মেসেজ থেকে নতুন file_id সংগ্রহ করা
+        if forwarded_message.video:
+            return forwarded_message.video.file_id
+        elif forwarded_message.photo:
+            return forwarded_message.photo.file_id
+        return None
+    except Exception as e:
+        print(f"লগ চ্যানেলে ফরোয়ার্ড করতে সমস্যা: {e}")
+        return None
 
 @app.on_message(filters.command("start"))
 async def start_cmd(client: Client, message: Message):
-    await message.reply_text("👋 হ্যালো! এই বটটি ফাইল ডাউনলোড না করেই দ্রুত থাম্বনেইল সেট করতে পারে।")
+    user_data.pop(message.from_user.id, None) # শুরু করলে ডেটা রিসেট
+    await message.reply_text("👋 হ্যালো! ছবি ও ভিডিও পাঠান, আমি থাম্বনেইল সেট করে দেব।")
 
-@app.on_message(filters.command("show_cover"))
-async def show_cover(client: Client, message: Message):
-    user_id = message.from_user.id
-    cover_file_id = user_cover.get(user_id)
-    if not cover_file_id:
-        await message.reply_text("❌ আপনার এখনো কোনো কভার সেভ করা নেই।")
-        return
-    await client.send_photo(chat_id=message.chat.id, photo=cover_file_id, caption="📌 আপনার সেভ করা কভার/থাম্বনেইল।")
-
-@app.on_message(filters.command("del_cover"))
-async def del_cover(client: Client, message: Message):
-    user_id = message.from_user.id
-    if user_cover.pop(user_id, None):
-        await message.reply_text("✅ আপনার সেভ করা কভার মুছে ফেলা হয়েছে।")
-    else:
-        await message.reply_text("❌ আপনার কাছে কোনো সেভ করা কভার ছিল না।")
+# --- ডিলিট এবং শো কমান্ড এখন প্রয়োজন নেই, কারণ ফ্লো সহজ করা হয়েছে ---
+# আপনি চাইলে এগুলো রাখতে পারেন, তবে মূল কার্যকারিতার জন্য এখন আর জরুরি নয়।
 
 @app.on_message(filters.photo)
 async def receive_photo(client: Client, message: Message):
     if message.from_user is None: return
     user_id = message.from_user.id
     
-    photo_file_id = message.photo.file_id
-    user_cover[user_id] = photo_file_id
+    status_msg = await message.reply_text("🖼️ ছবি পেয়েছি, প্রসেস করছি...", quote=True)
+    
+    new_photo_id = await get_new_file_id(message.photo.file_id)
+    if not new_photo_id:
+        await status_msg.edit_text("❌ ছবি প্রসেস করতে সমস্যা হয়েছে।")
+        return
 
-    pending_video = video_pending.get(user_id)
-    if pending_video:
-        status_msg = await message.reply_text("⏳ প্রসেস করা হচ্ছে...", quote=True)
+    # ইউজারের ডেটা ইনিশিয়ালাইজ করা
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    
+    user_data[user_id]['cover_id'] = new_photo_id
+    
+    # যদি আগে ভিডিও এসে থাকে, তাহলে এখন একসাথে পাঠাও
+    if 'video_id' in user_data[user_id]:
+        await status_msg.edit_text("⏳ ভিডিও এবং থাম্বনেইল একত্রিত করছি...")
         try:
             await client.send_video(
                 chat_id=message.chat.id,
-                video=pending_video["video_file_id"],
-                thumb=photo_file_id,
-                caption="✅ আপনার ভিডিওর সাথে কাস্টম থাম্বনেইল যুক্ত করা হয়েছে।",
-                # --- ★★★ সংশোধিত লাইন ★★★ ---
-                reply_to_message_id=pending_video["video_msg_id"]
+                video=user_data[user_id]['video_id'],
+                thumb=user_data[user_id]['cover_id'],
+                caption="✅ সফলভাবে থাম্বনেইল সেট করা হয়েছে।",
+                reply_to_message_id=user_data[user_id]['video_msg_id']
             )
             await status_msg.delete()
         except Exception as e:
             await status_msg.edit_text(f"❌ পাঠাতে সমস্যা হয়েছে: {e}")
         finally:
-            video_pending.pop(user_id, None)
+            user_data.pop(user_id, None) # কাজ শেষে ডেটা মুছে ফেলা
     else:
-        await message.reply_text("✔️ কভার ছবিটি সেভ করা হয়েছে। এখন একটি ভিডিও পাঠান।", quote=True)
+        await status_msg.edit_text("✔️ কভার ছবি প্রস্তুত। এখন ভিডিও পাঠান।")
 
 @app.on_message(filters.video)
 async def receive_video(client: Client, message: Message):
     if message.from_user is None: return
     user_id = message.from_user.id
-    
-    video_file_id = message.video.file_id
-    cover_file_id = user_cover.get(user_id)
-    
-    status_msg = await message.reply_text("⏳ প্রসেস করা হচ্ছে...", quote=True)
 
-    if cover_file_id:
+    status_msg = await message.reply_text("🎬 ভিডিও পেয়েছি, প্রসেস করছি...", quote=True)
+
+    new_video_id = await get_new_file_id(message.video.file_id)
+    if not new_video_id:
+        await status_msg.edit_text("❌ ভিডিও প্রসেস করতে সমস্যা হয়েছে।")
+        return
+        
+    if user_id not in user_data:
+        user_data[user_id] = {}
+
+    user_data[user_id]['video_id'] = new_video_id
+    user_data[user_id]['video_msg_id'] = message.id
+    
+    if 'cover_id' in user_data[user_id]:
+        await status_msg.edit_text("⏳ ভিডিও এবং থাম্বনেইল একত্রিত করছি...")
         try:
             await client.send_video(
                 chat_id=message.chat.id,
-                video=video_file_id,
-                thumb=cover_file_id,
-                caption="✅ আপনার ভিডিওটি সেভ করা কভারসহ পাঠানো হয়েছে।",
-                # --- ★★★ সংশোধিত লাইন ★★★ ---
-                reply_to_message_id=message.id 
+                video=user_data[user_id]['video_id'],
+                thumb=user_data[user_id]['cover_id'],
+                caption="✅ সফলভাবে থাম্বনেইল সেট করা হয়েছে।",
+                reply_to_message_id=message.id
             )
             await status_msg.delete()
         except Exception as e:
             await status_msg.edit_text(f"❌ পাঠাতে সমস্যা হয়েছে: {e}")
+        finally:
+            user_data.pop(user_id, None)
     else:
-        video_pending[user_id] = {
-            "video_file_id": video_file_id,
-            # --- ★★★ সংশোধিত লাইন ★★★ ---
-            "video_msg_id": message.id
-        }
-        await status_msg.edit_text("✔️ ভিডিও পেয়েছি। এখন একটি থাম্বনেইল (ছবি) পাঠান।")
+        await status_msg.edit_text("✔️ ভিডিও প্রস্তুত। এখন থাম্বনেইলের জন্য ছবি পাঠান।")
+
 
 # --- ওয়েব সার্ভার এবং মূল ফাংশন (অপরিবর্তিত) ---
 async def ping_handler(request):
@@ -131,7 +142,8 @@ async def start_web_server():
 
 async def main():
     await asyncio.gather(app.start(), start_web_server())
-    await app.set_bot_commands(BOT_COMMANDS)
+    # কমান্ড সেট করার প্রয়োজন নেই কারণ আমরা সেগুলো বাদ দিয়েছি
+    # await app.set_bot_commands(BOT_COMMANDS) 
     print("🚀 বট এখন অনলাইনে আছে এবং পোলিং মোডে মেসেজের জন্য অপেক্ষা করছে...")
     await asyncio.Event().wait()
 
