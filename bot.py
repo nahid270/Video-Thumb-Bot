@@ -13,9 +13,8 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # --- ওয়েব সার্ভার ও ওয়েবহুক এর জন্য ভ্যারিয়েবল ---
-# এই URL টি আপনাকে হোস্টিং সার্ভিস থেকে দেওয়া হবে। যেমন: https://your-app-name.onrender.com
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
-PORT = int(os.getenv("PORT", 8080)) # হোস্টিং সার্ভিস এই পোর্ট নম্বরটি দেয়
+PORT = int(os.getenv("PORT", 8080))
 
 # --- ভ্যারিয়েবল ঠিকমতো লোড হয়েছে কিনা তা পরীক্ষা করা ---
 if not all([API_ID, API_HASH, BOT_TOKEN, WEBHOOK_URL]):
@@ -27,11 +26,8 @@ API_ID = int(API_ID)
 video_pending = {}
 user_cover = {}
 
-# --- Pyrogram ক্লায়েন্ট (এখন no_updates=True দিয়ে শুরু হবে) ---
-# কারণ আমরা ওয়েবহুক থেকে আপডেট নেব, নিজে থেকে পোলিং করব না
 app = Client("thumb_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, no_updates=True)
 
-# --- ফাইল ডিলিট করার ফাংশন ---
 def cleanup_file(path):
     try:
         if path and os.path.exists(path):
@@ -39,15 +35,11 @@ def cleanup_file(path):
     except Exception as e:
         print(f"ফাইল ডিলিট করতে সমস্যা: {path}: {e}")
 
-# --- বট-এর জন্য কমান্ড লিস্ট ---
-# এটি করলে / চাপ দিলেই ইউজাররা কমান্ডগুলো দেখতে পাবে
 BOT_COMMANDS = [
     types.BotCommand("start", "🤖 বট চালু করুন"),
     types.BotCommand("show_cover", "🖼️ সেভ করা কভার দেখুন"),
     types.BotCommand("del_cover", "🗑️ সেভ করা কভার মুছুন"),
 ]
-
-# --- কমান্ড হ্যান্ডলার ---
 
 @app.on_message(filters.command("start"))
 async def start_cmd(client: Client, message: Message):
@@ -61,8 +53,6 @@ async def start_cmd(client: Client, message: Message):
         "➢ /del_cover - সেভ করা কভার ছবিটি মুছে ফেলতে।\n\n"
         "এখনই একটি ছবি বা ভিডিও পাঠিয়ে কাজ শুরু করুন!"
     )
-
-# --- বাকি হ্যান্ডলারগুলো অপরিবর্তিত থাকবে ---
 
 @app.on_message(filters.command("show_cover"))
 async def show_cover(client: Client, message: Message):
@@ -87,8 +77,12 @@ async def del_cover(client: Client, message: Message):
     else:
         await message.reply_text("❌ আপনার কাছে কোনো সেভ করা কভার ছিল না।")
 
-@app.on_message(filters.photo & ~filters.edited)
+# --- সংশোধিত লাইন ---
+@app.on_message(filters.photo)
 async def receive_photo(client: Client, message: Message):
+    # এডিট করা মেসেজ হলে কোনো সমস্যা নেই, তাই হ্যান্ডলারটি চলবে
+    if message.from_user is None: return # চ্যানেল থেকে আসা মেসেজ উপেক্ষা করুন
+
     user_id = message.from_user.id
     old_cover_path = user_cover.get(user_id)
     cleanup_file(old_cover_path)
@@ -117,8 +111,12 @@ async def receive_photo(client: Client, message: Message):
     else:
         await status_msg.edit_text("✔️ কভার ছবিটি সেভ করা হয়েছে। এখন একটি ভিডিও পাঠান।")
 
-@app.on_message(filters.video & ~filters.edited)
+# --- সংশোধিত লাইন ---
+@app.on_message(filters.video)
 async def receive_video(client: Client, message: Message):
+    # এডিট করা মেসেজ হলে কোনো সমস্যা নেই, তাই হ্যান্ডলারটি চলবে
+    if message.from_user is None: return # চ্যানেল থেকে আসা মেসেজ উপেক্ষা করুন
+
     user_id = message.from_user.id
     cover_path = user_cover.get(user_id)
     
@@ -152,31 +150,28 @@ async def receive_video(client: Client, message: Message):
         }
         await status_msg.edit_text("✔️ ভিডিও পেয়েছি। এখন একটি থাম্বনেইল (ছবি) পাঠান।")
 
-
-# --- ওয়েবহুক হ্যান্ডলার: টেলিগ্রাম থেকে আসা সব আপডেট এখানে আসবে ---
+# ওয়েবহুক হ্যান্ডলার এবং ওয়েব অ্যাপ্লিকেশন কোড অপরিবর্তিত
 async def webhook_handler(request):
     try:
-        update = await request.json()
-        await app.feed_raw_update(update)
+        update_data = await request.json()
+        await app.feed_raw_update(update_data)
         return web.Response(status=200)
     except Exception as e:
         print(f"ওয়েবহুক হ্যান্ডলারে সমস্যা: {e}")
         return web.Response(status=500)
 
-# --- অ্যাপ্লিকেশন শুরু এবং বন্ধ করার ফাংশন ---
 async def on_startup(web_app):
     print("ওয়েব অ্যাপ্লিকেশন চালু হচ্ছে...")
     if not os.path.isdir("downloads"):
         os.makedirs("downloads")
     
     await app.start()
-    # বট টোকেন দিয়ে একটি সিক্রেট URL তৈরি করা হচ্ছে
     webhook_path = f"/{BOT_TOKEN}"
     full_webhook_url = WEBHOOK_URL.rstrip('/') + webhook_path
 
     try:
         await app.set_bot_webhook(url=full_webhook_url)
-        await app.set_bot_commands(BOT_COMMANDS) # বট চালু হলেই কমান্ডগুলো সেট হয়ে যাবে
+        await app.set_bot_commands(BOT_COMMANDS)
         print(f"ওয়েবহুক সেট করা হয়েছে: {full_webhook_url}")
         print("বট এখন চলছে...")
     except Exception as e:
@@ -187,16 +182,12 @@ async def on_shutdown(web_app):
     await app.stop()
     print("বট বন্ধ হয়েছে।")
 
-# --- মূল ওয়েব অ্যাপ্লিকেশন ---
 if __name__ == "__main__":
     web_app = web.Application()
     
-    # যখন অ্যাপ চালু হবে এবং বন্ধ হবে, তখন কী হবে তা নির্ধারণ করা
     web_app.on_startup.append(on_startup)
     web_app.on_shutdown.append(on_shutdown)
     
-    # টেলিগ্রাম থেকে আসা POST রিকোয়েস্ট হ্যান্ডেল করার জন্য রুট
     web_app.router.add_post(f"/{BOT_TOKEN}", webhook_handler)
     
-    # ওয়েব সার্ভার চালু করা
     web.run_app(web_app, host="0.0.0.0", port=PORT)
