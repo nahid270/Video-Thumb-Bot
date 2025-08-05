@@ -20,7 +20,7 @@ if not all([API_ID, API_HASH, BOT_TOKEN]):
 
 API_ID = int(API_ID)
 
-# --- অ্যাপ্লিকেশন স্টোরেজ (এখন আমরা file_id সেভ করব, ফাইলের পাথ নয়) ---
+# --- অ্যাপ্লিকেশন স্টোরেজ (file_id ব্যবহার করে) ---
 video_pending = {}  # {user_id: {"video_file_id": "...", "video_msg_id": ...}}
 user_cover = {}     # {user_id: "photo_file_id"}
 
@@ -34,7 +34,7 @@ BOT_COMMANDS = [
     types.BotCommand("del_cover", "🗑️ সেভ করা কভার মুছুন"),
 ]
 
-# --- হ্যান্ডলার (এখন file_id ব্যবহার করে আপডেট করা) ---
+# --- হ্যান্ডলার (সংশোধিত) ---
 
 @app.on_message(filters.command("start"))
 async def start_cmd(client: Client, message: Message):
@@ -47,7 +47,6 @@ async def show_cover(client: Client, message: Message):
     if not cover_file_id:
         await message.reply_text("❌ আপনার এখনো কোনো কভার সেভ করা নেই।")
         return
-    # সেভ করা file_id দিয়ে ছবি পাঠানো
     await client.send_photo(chat_id=message.chat.id, photo=cover_file_id, caption="📌 আপনার সেভ করা কভার/থাম্বনেইল।")
 
 @app.on_message(filters.command("del_cover"))
@@ -63,7 +62,6 @@ async def receive_photo(client: Client, message: Message):
     if message.from_user is None: return
     user_id = message.from_user.id
     
-    # ছবির file_id সেভ করা
     photo_file_id = message.photo.file_id
     user_cover[user_id] = photo_file_id
 
@@ -71,15 +69,15 @@ async def receive_photo(client: Client, message: Message):
     if pending_video:
         status_msg = await message.reply_text("⏳ প্রসেস করা হচ্ছে...", quote=True)
         try:
-            # ডাউনলোড/আপলোড ছাড়া সরাসরি file_id দিয়ে ভিডিও পাঠানো
             await client.send_video(
                 chat_id=message.chat.id,
                 video=pending_video["video_file_id"],
                 thumb=photo_file_id,
                 caption="✅ আপনার ভিডিওর সাথে কাস্টম থাম্বনেইল যুক্ত করা হয়েছে।",
+                # --- ★★★ সংশোধিত লাইন ★★★ ---
                 reply_to_message_id=pending_video["video_msg_id"]
             )
-            await status_msg.delete() # স্ট্যাটাস মেসেজ ডিলিট করে দেওয়া
+            await status_msg.delete()
         except Exception as e:
             await status_msg.edit_text(f"❌ পাঠাতে সমস্যা হয়েছে: {e}")
         finally:
@@ -99,26 +97,26 @@ async def receive_video(client: Client, message: Message):
 
     if cover_file_id:
         try:
-            # ডাউনলোড/আপলোড ছাড়া সরাসরি file_id দিয়ে ভিডিও পাঠানো
             await client.send_video(
                 chat_id=message.chat.id,
                 video=video_file_id,
                 thumb=cover_file_id,
                 caption="✅ আপনার ভিডিওটি সেভ করা কভারসহ পাঠানো হয়েছে।",
-                reply_to_message_id=message.message_id
+                # --- ★★★ সংশোধিত লাইন ★★★ ---
+                reply_to_message_id=message.id 
             )
             await status_msg.delete()
         except Exception as e:
             await status_msg.edit_text(f"❌ পাঠাতে সমস্যা হয়েছে: {e}")
     else:
-        # কোনো কভার সেভ করা না থাকলে, ভিডিওর file_id সেভ করে রাখা
         video_pending[user_id] = {
             "video_file_id": video_file_id,
-            "video_msg_id": message.message_id
+            # --- ★★★ সংশোধিত লাইন ★★★ ---
+            "video_msg_id": message.id
         }
         await status_msg.edit_text("✔️ ভিডিও পেয়েছি। এখন একটি থাম্বনেইল (ছবি) পাঠান।")
 
-# --- ওয়েব সার্ভার এবং মূল ফাংশন (আগের মতোই) ---
+# --- ওয়েব সার্ভার এবং মূল ফাংশন (অপরিবর্তিত) ---
 async def ping_handler(request):
     return web.Response(text="I am alive!", status=200)
 
